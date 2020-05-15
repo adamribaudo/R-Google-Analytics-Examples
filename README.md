@@ -4,6 +4,7 @@
 
 This repository contains tutorials and code samples instructing analytics practioners on methods of enhancing their Google Analytics analysis through the use of R.
 
-## Tutorials
+## Examples
 
 - Quantifying the impact of events on time series data using the CausalImpact library: [Tutorial](https://adamribaudo.github.io/R-Google-Analytics-Examples/Tutorial-Causal-Impact.nb.html) / [Code](Tutorial-Causal-Impact.Rmd)
+- Google Analytics audits via scripted R Markdown file: [Output](https://adamribaudo.github.io/R-Google-Analytics-Examples/blob/master/GA-Audit-Tool.html) / [Code](GA-Audit-Tool.Rmd)
