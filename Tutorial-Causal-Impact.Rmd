@@ -1,0 +1,194 @@
+---
+title: "Measuring Causal Impact with GA Data - Evaluating the Effects of COVID19 on Hospital Appointments"
+output: html_notebook
+---
+
+```{r setup, message=FALSE,warning=FALSE,echo=FALSE}
+
+library(CausalImpact)
+library(googleAnalyticsR)
+library(googleAuthR)
+library(tidyverse)
+library(zoo)
+library(bsts)
+library(gt)
+gar_auth(email = Sys.getenv("OAUTH_EMAIL")) # Actual email hidden to protect the account
+view_id <- Sys.getenv("CAUSAL_INF_VIEW_ID") # Actual GA view ID hidden to protect the account
+
+### References
+# BSTS http://www.unofficialgoogledatascience.com/2017/07/fitting-bayesian-structural-time-series.html
+# CausalImpact https://google.github.io/CausalImpact/CausalImpact.html
+```
+
+# Overview
+
+The [CausalImpact](https://google.github.io/CausalImpact/CausalImpact.html) library measures the effects of an event on a response variable when establishing a traditional control group through a randomized trial is not a viable option. It does this by establishing a 'synthetic control' which serves as a baseline under which the actual data is compared. 
+
+In this tutorial, we'll look at the effect that the Corona virus outbreak had on the number of "Make an Appointment" forms completed on a hospital website. To begin, we must establish a "pre-period" before the event occurred and a "post-period" after the event occurred. The pre-period is used to train a Bayesian Structural Time Series model. In the post-period, the model is used to predict our synthetic control which indicates how the outcome may have performed were the event not to have occurred.
+
+Our pre-period will be 10/1/2019 to 3/15/2020 and our post-period will be 3/16/2020 - 5/4/2020. Our predictor variables will be the number of sessions from organic, social, and referral sources. An important assumption made by the CausalImpact library is that our predictors are *not* affected by our event.
+
+# Gathering Data from Google Analytics
+
+First, we must gather the data necessary for our analysis. Our response variable, as established earlier, will be "Make an Appointment" form completions which is the goal1Completions metric in GA. Our predictor variables will come from the channelGrouping dimension in GA.
+
+We know that the hospital suspended paid media around the time of the outbreak so we'll remove traffic from paid sources using the following filter:
+
+```{r eval= FALSE}
+channel_filter <- dim_filter(dimension="channelGrouping",operator="REGEXP",expressions="Paid Search|Display",not = T)
+```
+
+We call the Google Analytics reporting API twice. Once to gather the goal completion data:
+
+```{r eval=FALSE}
+# Gather goal data
+df_goals <- google_analytics(viewId = view_id,
+                       date_range = date_range,
+                       metrics = "goal1Completions",
+                       dimensions = c("date"),
+                       dim_filters = my_filter_clause,
+                       max = -1)
+```
+ 
+and once to gather the channel session data:
+
+```{r eval=FALSE}
+df_sessions <- google_analytics(viewId = view_id,
+                       date_range = date_range,
+                       metrics = c("sessions"),
+                       dimensions = c("date","channelGrouping"),
+                       max = -1,
+                       dim_filters = my_filter_clause)
+```
+
+This avoids us having to aggregate the goal data after pivoting the session data. Pivoting the session data generates multiple columns of data from our single channelGrouping column. Putting this all together is shown below.
+
+```{r message=FALSE, warning=FALSE}
+
+date_range <- c("2019-10-01","2020-05-04")
+
+# Remove paid traffic
+channel_filter <- dim_filter(dimension="channelGrouping",operator="REGEXP",expressions="Paid Search|Display",not = T)
+my_filter_clause <- filter_clause_ga4(list(channel_filter))
+
+# Gather goal data
+df_goals <- google_analytics(viewId = view_id,
+                       date_range = date_range,
+                       metrics = "goal1Completions",
+                       dimensions = c("date"),
+                       dim_filters = my_filter_clause,
+                       max = -1)
+# Gather session data
+df_sessions <- google_analytics(viewId = view_id,
+                       date_range = date_range,
+                       metrics = c("sessions"),
+                       dimensions = c("date","channelGrouping"),
+                       max = -1,
+                       dim_filters = my_filter_clause) %>% 
+   pivot_wider(id_cols=date,names_from=channelGrouping,values_from=sessions) %>%
+  mutate_at(vars(-date),~if_else(is.na(.),0,.)) 
+
+# Merge the goal completion data into the sessions data
+df <- df_sessions %>% mutate(y = df_goals$goal1Completions)
+
+```
+
+```{r}
+
+head(df) %>% gt()
+
+```
+
+
+# Create BSTS Model
+
+The following code creates a Bayesian Structural Time Series model that will be used by the CausalImpact library to generate our synthetic control. It's here that we input our pre-period and post-period as well as our predictor and response variables. 
+
+The BSTS package has several options for modifying our model. Here, we apply a "local level" which captures high level trend in the response variable. We also capture the 7-day weekly trend in our data using `AddSeasonal()`. 
+
+```{r warning=FALSE,message=FALSE}
+df2 <- df # Create copy of our DF so we can re-run after the remove the response data from prediction period
+
+# Assign pre and post periods
+pre.period <- c(1,which(df$date == "2020-03-15"))
+post.period <- c(which(df$date == "2020-03-15")+1,length(df$date))
+post.period.response <- df$y[post.period[1] : post.period[2]]
+
+# Remove outcomes from the post-period. The BSTS model should be ignorant of the values we intend to predict
+df2$y[post.period[1] : post.period[2]] <- NA
+
+# Create a zoo object which adds dates to plot output
+df_zoo <- read.zoo(df2, format = "%Y-%m-%d") 
+
+# Add loacl and seasonal trends
+ss <- AddLocalLevel(list(), df_zoo$y)
+ss <- AddSeasonal(ss, df_zoo$y, nseasons = 7) # weekly seasonal trend
+bsts.model <- bsts(y ~ ., ss, niter = 1000, data = df3_zoo, family = "gaussian", ping=0)
+
+plot(bsts.model)
+
+```
+
+The blue dots are the actual data points and the black line underneath is our estimated posterior distribution. We can see that the model does a reasonable job of predicting form completions, though there are some outliers in late February that are not well predicted.  This will increase our uncertainty in our predictions and thus widen our confidence interval (the shading around the black line).
+
+# Generate CausalImpact Analysis
+
+Now that we have our model, we can compare our prediction to what actually happened and measure the impact of the event. 
+
+```{r}
+impact <- CausalImpact(bsts.model = bsts.model,
+                       post.period.response = post.period.response)
+
+plot(impact)
+```
+
+The top plot shows the actual data in black and our predicted distribution of the response variable in blue with the median value as a dashed blue line. The 2nd plot subtracts the predicted data from the actual data to show the difference between the two values. If th effect had no impact, we would expect the pointwise estimated to hover around 0. The last plot shows the cumulative impact of the event over time. Notice how our confidence interval (shown in blue) widens as time goes on.
+
+Our causal impact model confirms a decrease in the number of form completions, however the 95% confidence interval quickly includes 0 which means that we cannot say with certainty that the impact extends into April. 
+While we weren't able to find conclusive results, being able to measure our certainty is a major benefit of Bayesian models such as this one. 
+
+# Causal Impact Report
+
+One nice feature of the CausalImpact library is that it provides a human-friendly read-out of the results. Here they are summarized below.
+
+```{r}
+ summary(impact, "report")
+```
+
+# Validating Our Synthetic Control
+
+One method of validating your model is to generate predictions *before* the event occurred. If our model is well-behaved, we should see little difference between the predicted and actual response data.
+
+```{r}
+
+# Filter to include only pre-event data. Also reorder columns to place y after the date
+df_compare <- df %>% filter(date < "2020-02-15") %>% select(date,last_col(),2:length(df))
+
+df_zoo <- read.zoo(df_compare, format = "%Y-%m-%d")
+
+pre.period <- c(index(df_zoo)[1],index(df_zoo)[which(df_compare$date == "2020-01-15")])
+post.period <- c(index(df_zoo)[which(df_compare$date == "2020-01-15")+1],index(df_zoo)[length(df_compare$date)])
+
+impact <- CausalImpact(df_zoo, pre.period, post.period)
+
+
+plot(impact)
+```
+
+Above we see that the model doesn't do a great job of predicting the upper spikes of the form completions which likely explains the wide confidence interval seen earlier. 
+
+# Comparison to the Naive Approach
+
+Deploying advanced modeling techniques is only useful if there are advantages over much simpler techniques. The naive method would be to use our pre-intervention data to establish an average and continue that average into the post-period to estimate a synthetic control. 
+
+Before the event, we had about 19 form fills a day. After, we had 8.5 a day. That's a decrease of about 52%. CausalImpact estimated a decrease in 44% with a 95% confidence interval of 29%-63%. Were these numbers to be substantially different, and we had confidence in our model, we would prefer the figures generated by CausalImpact.
+
+There are some clear cases when modeling will outperform the naive approach described above:
+
+1: If there is a trend in the response variable, then averaging the pre-period will not capture the continuation of that trend. 
+2. If evaluating the degree of confidence is important, the CausalImpact model is preferable due to its ability to measure uncertainty.
+
+
+
+
+
