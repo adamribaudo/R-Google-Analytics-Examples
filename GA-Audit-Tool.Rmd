@@ -1,0 +1,370 @@
+---
+title: "GA Audit Tool"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+  html_notebook:
+    df_print: paged
+    number_sections: yes
+    theme: cosmo
+    toc: yes
+    toc_float: yes
+---
+
+<style>
+.hide {display:none;}
+</style>
+
+```{r setup, echo=FALSE, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(
+  echo = F,
+  collapse = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  out.width = "70%",
+  fig.align = 'center',
+  fig.width = 7,
+  fig.asp = 0.618,  # 1 / phi
+  fig.show = "hold"
+)
+library(assertthat)
+library(tidyverse)
+library(rmarkdown)
+options(gargle_oauth_cache = getwd()) # Save any Oauth tokens to the current directory
+library(googleAuthR)
+
+# Service Account Credentials
+# Readonly scope is required for certain management API calls. See https://developers.google.com/analytics/devguides/config/mgmt/v3/authorization#OAuth2Authorizing
+options(googleAuthR.scopes.selected = "https://www.googleapis.com/auth/analytics.readonly")
+gar_auth_service(json_file=Sys.getenv("SERVICE_JSON"))
+
+# Alternatively, an OAuth client and email can be provided
+gar_set_client(json = Sys.getenv("CLIENT_JSON"))
+library(googleAnalyticsR)
+#ga_auth(email=Sys.getenv("CLIENT_EMAIL"))
+#gar_auth()
+library(lubridate)
+library(stringr)
+library(gt)
+
+theme_set(theme_minimal())
+
+# Select an account ID and view ID to begin
+account_id <- 62965925 # NtS GA Account
+view_id <- 105540599 # NtS Main view
+```
+
+```{r property and view data, message=FALSE, warning=FALSE}
+accounts <- ga_accounts()
+cur_account <- accounts %>% filter(id == account_id)
+property_df <- ga_webproperty_list(account_id)
+views_df <- bind_rows(lapply(property_df$id, function(x){ga_view_list(accountId = account_id, webPropertyId = x)})) %>% left_join(property_df,by=c("webPropertyId"="id"))
+
+# View-specific
+view_name <- (views_df %>% filter(id == view_id))$name.x
+view_url <- (views_df %>% filter(id == view_id))$websiteUrl.x
+property_url <- (views_df %>% filter(id == view_id))$websiteUrl.y
+property_name <- (views_df %>% filter(id == view_id))$name.y
+property_id <- (views_df %>% filter(id == view_id))$webPropertyId
+custom_dimensions_df <-  ga_custom_vars_list(accountId = account_id, webPropertyId = property_id)
+goals_df <- ga_goal_list(webPropertyId = property_id, profileId = view_id, accountId=account_id)
+
+view_filters_df <- ga_filter_view_list(webPropertyId = property_id, viewId = view_id,accountId = account_id) %>% select(filterRef.id, profileRef.id, profileRef.name, rank) %>% left_join(ga_filter_list(account_id), by=c("filterRef.id" = "id"))
+
+
+```
+
+# Account Structure
+
+## Properties
+
+The account, __`r cur_account$name`__, has `r nrow(property_df)` properties. These are shown below sorted by update date in reverse chronological order. 
+
+```{r rows.print=5,cols.min.print=3}
+property_df %>% arrange(desc(updated)) %>% select(Property=name, URL=websiteUrl, `Updated Date`=updated)
+```
+
+## Views
+
+
+
+```{r}
+property_with_most_views <- views_df %>% group_by(`name.y`) %>% tally() %>% arrange(desc(n)) %>% ungroup() %>% filter(row_number() == 1)
+```
+
+In total, there are `r nrow(views_df)` views. These are shown below in reverse chronological order by update date.
+
+```{r rows.print=5,cols.min.print=3}
+views_df %>% arrange(desc(updated.x)) %>% select(View=name.x, Property=name.y, `Update Date`=updated.x)
+```
+
+TODO - only need to show this if there is more than 1 property
+
+The property with the most views is __`r property_with_most_views$name.y`__ with `r property_with_most_views$n` views. The number of views per property is below.
+
+```{r fig.height = 4}
+ggplot(property_with_views_views <- views_df %>% group_by(webPropertyId, name.y) %>% tally()) + 
+  geom_col(aes(y=n,x=reorder(paste(webPropertyId, name.y, sep=" : "),(n)))) + coord_flip() + ylab("Number of Views") + xlab("Property ID")
+```
+
+# Configuration
+
+## Custom Dimensions
+
+
+```{r}
+no_custom_dimensions <- nrow(custom_dimensions_df) == 0
+```
+
+<!-- No CD's found -->
+<div style="display:`r if_else(no_custom_dimensions,"block","none")`">
+The view, __`r view_name`__, has no associated custom dimensions
+</div>
+
+
+<!-- Yes, there are CD's -->
+<div style="display:`r if_else(no_custom_dimensions,"none","block")`">
+
+Property __`r property_name`__ has `r nrow(custom_dimensions_df)` custom dimensions shown below:
+
+```{r}
+custom_dimensions_df %>% select(ID = index, Name = name, Scope = scope, `Is Active?`=active)
+```
+
+
+</div>
+
+```{r}
+# Check to see if there are any goals and change display of markdown accordingly
+no_goals <- nrow(goals_df) == 0
+no_destination_goals <- F
+no_event_goals <- F
+
+if(!no_goals)
+{
+  no_destination_goals <- nrow(goals_df %>% filter(type == "URL_DESTINATION")) == 0
+  no_event_goals <- nrow(goals_df %>% filter(type == "EVENT")) == 0
+}
+```
+
+## Goals {.tabset .tabset-fade .tabset-pills `r if_else(no_goals,".hide","")`}
+
+### All Goals (`r nrow(goals_df)`)
+
+View __`r view_name`__ has `r nrow(goals_df)` goals listed below.
+
+```{r rows.print=5}
+if(!no_goals)
+{
+  goals_df %>% select(Goal = name, Type = type, `Is Active?`=active)
+}
+```
+
+### Destination Goals (`r nrow(goals_df %>% filter(type == "URL_DESTINATION"))`)
+
+```{r}
+if(!no_goals && !no_destination_goals)
+{
+  goals_df %>% filter(type == "URL_DESTINATION") %>% select(Goal = name,URL = urlDestinationDetails.url)
+}
+```
+
+### Event Goals (`r nrow(goals_df %>% filter(type == "EVENT"))`)
+
+```{r}
+if(!no_goals && !no_event_goals)
+{
+  goals_df %>% filter(type == "EVENT") %>% select(Goal = name,`Event Details` = eventDetails.eventConditions)
+}
+```
+
+
+```{r}
+# Check to see if there are any goals and change display of markdown accordingly
+no_filters <- nrow(view_filters_df) == 0
+no_include_exclude_filters <- nrow(view_filters_df %>% filter(type == "INCLUDE" | type == "EXCLUDE")) == 0
+```
+
+## Filters {.tabset .tabset-fade .tabset-pills `r if_else(no_filters,".hide","")`}
+
+### All Filters (`r nrow(view_filters_df)`)
+
+View __`r view_name`__ has `r nrow(view_filters_df)` filters listed below.
+
+```{r rows.print=7}
+if(!no_filters)
+{
+  view_filters_df %>% select(Filter = name, Type = type)
+}
+```
+
+### Include Filters (`r nrow(view_filters_df %>% filter(type == "INCLUDE"))`)
+
+Include/Exclude filters are called out below along with their criteria.
+
+```{r rows.print=7}
+if(!no_filters && nrow(view_filters_df %>% filter(type == "INCLUDE")) > 0)
+{
+  view_filters_df %>% filter(type=="INCLUDE") %>% mutate(Criteria = if_else(type == "INCLUDE",paste(includeDetails.field,includeDetails.matchType,includeDetails.expressionValue),paste(excludeDetails.field,excludeDetails.matchType,excludeDetails.expressionValue))) %>% select(Filter = name, Type = type, Criteria)
+}
+```
+
+### Exclude Filters (`r nrow(view_filters_df %>% filter(type == "EXCLUDE"))`)
+
+Include/Exclude filters are called out below along with their criteria.
+
+```{r rows.print=7}
+if(!no_filters && nrow(view_filters_df %>% filter(type == "EXCLUDE")) > 0)
+{
+  view_filters_df %>% filter(type=="EXCLUDE") %>% mutate(Criteria = if_else(type == "INCLUDE",paste(includeDetails.field,includeDetails.matchType,includeDetails.expressionValue),paste(excludeDetails.field,excludeDetails.matchType,excludeDetails.expressionValue))) %>% select(Filter = name, Type = type, Criteria)
+}
+```
+
+
+# Data Integrity 
+
+## Goal Measurement {.tabset .tabset-fade .tabset-pills `r if_else(no_goals,".hide","")`}
+
+```{r message=FALSE,warning=FALSE}
+if(!no_goals)
+{
+  # Capture goal IDs to review
+  ga_goal_metric_names <- paste0("goal",goals_df$id,"Completions")
+  ga_goal_names <- goals_df$name
+  goal_lookup <- data.frame(list(Goal=ga_goal_names,Metric_Name=ga_goal_metric_names))
+  date_range_7 <- c(Sys.Date() - 8,Sys.Date() - 1)
+  date_range_30 <- c(Sys.Date() - 31,Sys.Date() - 1)
+  date_range_90 <- c(Sys.Date() - 91,Sys.Date() - 1)
+  
+  
+  get_goal_data <- function(date_range){
+    google_analytics(viewId = view_id, date_range = date_range, metrics = ga_goal_metric_names, dimensions = c("channelGrouping")) %>% select(-channelGrouping) %>% pivot_longer(cols=everything(),names_to="Goal",values_to = "Completions") %>% group_by(Goal) %>% summarise(Completions = sum(Completions)) %>% left_join(goal_lookup,by=c("Goal"="Metric_Name")) %>% select(Goal = Goal.y,Completions)
+  }
+  
+  ga_goal_data_7 <- get_goal_data(date_range_7)
+  ga_goal_data_30 <- get_goal_data(date_range_30)
+  ga_goal_data_90 <- get_goal_data(date_range_90)
+}
+```
+
+
+### Past 7 Days
+
+```{r}
+if(!no_goals)
+{
+  ga_goal_data_7
+}
+```
+
+
+
+### Past 30 Days
+
+```{r}
+if(!no_goals)
+{
+  ga_goal_data_30
+}
+```
+### Past 90 Days
+
+```{r}
+if(!no_goals)
+{
+  ga_goal_data_90
+}
+```
+
+## Hostname Review
+
+```{r message=FALSE,warning=FALSE}
+ga_hostnames <- google_analytics(viewId = view_id, date_range = c(Sys.Date()-31,Sys.Date()-1),metrics = "sessions",dimensions = c("hostname"),max=-1)
+```
+
+In many cases, GA properties and views are capturing data from the wrong domain or sub-domain. As a reference, the URL associated with __`r view_name`__ is `r view_url` and the URL associated with its property is `r property_url`. These URLs are configured in the GA admin and don't necessarily indicate which domains should be tracked.
+
+Data has been retrieved for the last 30 days (`r paste0(Sys.Date()-31," to ",Sys.Date()-1)`). Overall, `r nrow(ga_hostnames)` unique hostnames were discovered.
+
+```{r}
+ga_hostnames
+```
+
+```{r message=FALSE,warning=FALSE}
+ga_events <- google_analytics(viewId = view_id, date_range = c(Sys.Date()-31,Sys.Date()-1),metrics = "totalEvents",dimensions = c("eventCategory","eventAction","eventLabel"),max=-1)
+```
+
+## Events {.tabset .tabset-fade .tabset-pills `r if_else(nrow(ga_events) == 0,".hide","")`}
+
+### Top Events
+
+```{r}
+ga_events %>% arrange(desc(totalEvents)) %>% select(Category = eventCategory, Action = eventAction, Label = eventLabel, Events = totalEvents) %>% head(100)
+```
+
+
+### Unique Event Categories
+
+```{r}
+ga_events %>% select(`Event Category` = eventCategory, Total = totalEvents) %>% group_by(`Event Category`) %>% summarise(Total = sum(Total)) %>% arrange(desc(Total))
+```
+
+### Unique Event Actions
+
+```{r}
+ga_events %>% select(`Event Action` = eventAction, Total = totalEvents) %>% group_by(`Event Action`) %>% summarise(Total = sum(Total)) %>% arrange(desc(Total))
+```
+
+### Unique Event Labels
+
+```{r}
+ga_events %>% select(`Event Label` = eventLabel, Total = totalEvents) %>% group_by(`Event Label`) %>% summarise(Total = sum(Total)) %>% arrange(desc(Total))
+```
+
+# Trends
+
+## All Traffic
+
+```{r message=FALSE,warning=FALSE,fig.width=10,fig.height=5}
+ga_all_traffic_current <- google_analytics(viewId=view_id,date_range=c(Sys.Date()-31,Sys.Date()-1),metrics="sessions",dimensions = c("date")) %>% rename(`Sessions - Last 30 Days`=sessions) %>% mutate(row = row_number())
+ga_all_traffic_mom <- google_analytics(viewId=view_id,date_range=c(Sys.Date()-62,Sys.Date()-32),metrics="sessions",dimensions = c("date")) %>% rename(`Sessions - Previous Period`=sessions) %>% mutate(row = row_number())
+ga_all_traffic_yoy <- google_analytics(viewId=view_id,date_range=c(Sys.Date()-365-30,Sys.Date()-365-1),metrics="sessions",dimensions = c("date")) %>% rename(`Sessions - Previous Year`=sessions) %>% mutate(row = row_number())
+
+ga_all_traffic <- ga_all_traffic_current %>% left_join(ga_all_traffic_mom %>% select(-date)) %>% left_join(ga_all_traffic_yoy %>% select(-date)) %>% select(-row) %>% pivot_longer(cols=-date,names_to = "Period",values_to="Sessions")
+
+ggplot(ga_all_traffic) + geom_line(aes(x=date,y=Sessions,color=Period)) + xlab("Date") + labs(title="Sessions from All Sources")
+
+```
+
+
+## Landing Pages
+
+Showing top 100 landing pages by number of sessions.
+
+```{r message=FALSE,warning=FALSE}
+ga_landing_pages <- google_analytics(viewId=view_id, date_range=c(Sys.Date()-31,Sys.Date()-1),metrics=c("sessions","bounceRate","avgSessionDuration"), dimensions=c("landingPagePath"),max=100) %>% arrange(desc(sessions)) %>% rename(`Landing Page` = landingPagePath,`Bounce Rate` = bounceRate, `Avg Session Duration` = avgSessionDuration, Sessions = sessions)
+
+ga_landing_pages
+```
+
+
+## Top Referral Sources
+
+```{r message=FALSE,warning=FALSE}
+filter_clause <- filter_clause_ga4(list(dim_filter(dimension = "channelGrouping", operator = "EXACT", expressions = "Referral")))
+
+ga_referrers <- google_analytics(viewId=view_id, date_range=c(Sys.Date()-31,Sys.Date()-1),metrics=c("sessions","bounceRate","avgSessionDuration"), dimensions=c("sourceMedium"),dim_filters = filter_clause,max=100) 
+
+if(!is.null(ga_referrers))
+{
+ ga_referrers %>% arrange(desc(sessions)) 
+}
+```
+
+# TODO List
+
+- Campaign Trends
+- Check for path format (full path including host name or not)
+- Anomalies - Gaps in data, start/end date of data collection
+- Campaign Tracking - Source/mediums ? What else?
