@@ -73,13 +73,12 @@ dygraph(ga_sessions_xts) %>%
 ```{r}
 ga_channels %>% 
   # Generate summary row at the top first. channelGrouping is set to "" to hide any label for the summary row
-  summarise(users = sum(users), newUsers=sum(newUsers),sessions=sum(sessions),bounceRate=sum(bounces)/sum(sessions), pageviewsPerSession = sum(pageviews)/sum(sessions), avgSessionDuration = sum(sessionDuration)/sum(sessions), goal1Completions = sum(goal1Completions),goal1ConversionRate=sum(goal1Completions)/sum(sessions), goal1Value=sum(goal1Value)) %>% mutate(is_summary_row = "", channelGrouping = "") %>% 
+  summarise(users = sum(users), newUsers=sum(newUsers),sessions=sum(sessions),bounceRate=sum(bounces)/sum(sessions), pageviewsPerSession = sum(pageviews)/sum(sessions), avgSessionDuration = sum(sessionDuration)/sum(sessions), goal1Completions = sum(goal1Completions),goal1ConversionRate=sum(goal1Completions)/sum(sessions), goal1Value=sum(goal1Value)) %>% mutate(channelGrouping = "") %>% 
   # Bind the remaining data rows for the detailed data
-  bind_rows(ga_channels %>% mutate(bounceRate = bounces/sessions, goal1ConversionRate = goal1Completions/sessions) %>% select(-pageviews,-sessionDuration,-bounces) %>% mutate(is_summary_row=" ") %>% arrange(desc(users))) %>%
+  bind_rows(ga_channels %>% mutate(bounceRate = bounces/sessions, goal1ConversionRate = goal1Completions/sessions) %>% select(-pageviews,-sessionDuration,-bounces) %>% arrange(desc(users))) %>%
   mutate(avgSessionDuration = seconds_to_period(round(avgSessionDuration))) %>%
   # Begin constructing gt table
-  gt(rowname_col = "channelGrouping",
-     groupname_col = "is_summary_row") %>%
+  gt(rowname_col = "channelGrouping") %>%
   tab_spanner(label = "Acquisition", columns = vars(users, newUsers, sessions)) %>%
   tab_spanner(label = "Behavior", columns = vars(bounceRate, pageviewsPerSession, avgSessionDuration)) %>%
   tab_spanner(label = "Conversions", columns = vars(goal1ConversionRate, goal1Completions, goal1Value)) %>%
@@ -113,18 +112,6 @@ ga_channels %>%
     style = list(cell_fill(color = "#E9E9E9"),
               cell_text(font = "Roboto", weight="bold",v_align="middle",size=px(10),align="center")),
     locations = cells_column_labels(vars(users,newUsers,sessions,bounceRate,pageviewsPerSession,avgSessionDuration,goal1ConversionRate,goal1Completions,goal1Value))
-  )  %>%
-  tab_style(
-    style = list(cell_fill(color = "#F8F8F8"),
-                 cell_borders(sides = "all", color = "#FFFFFF", style = "solid", weight = px(0)),
-              cell_text(font = "Roboto", v_align="top",size=px(1),align="right")),
-    locations = cells_row_groups(groups = "")
-  )  %>%
-  tab_style(
-    style = list(cell_fill(color = "#F8F8F8"),
-                 cell_borders(sides = "all", color = "#FFFFFF", style = "solid", weight = px(0)),
-              cell_text(size=px(0))),
-    locations = cells_row_groups(groups = " ")
   )  %>%
   tab_style(
     style = list(cell_fill(color = "#FFFFFF"),
