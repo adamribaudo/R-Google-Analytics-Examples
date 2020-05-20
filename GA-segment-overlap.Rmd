@@ -1,0 +1,232 @@
+---
+title: "Evaluating Google Analytics Segment Overlap in R"
+output: 
+  html_document:
+    toc: yes
+    toc_float: yes
+    df_print: paged
+    number_sections: yes
+    theme: cosmo
+  html_notebook:
+    df_print: paged
+    number_sections: yes
+    theme: cosmo
+    toc: yes
+    toc_float: yes
+---
+
+```{r setup, warning=F, message=F,echo=F}
+knitr::opts_chunk$set(
+  echo = T,
+  collapse = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  out.width = "70%",
+  fig.align = 'center',
+  fig.width = 7,
+  fig.asp = 0.618,  # 1 / phi
+  fig.show = "hold"
+)
+library(RColorBrewer)
+library(assertthat)
+library(tidyverse)
+library(rmarkdown)
+#options(gargle_oauth_email = Sys.getenv("CLIENT_EMAIL"))
+#options(gargle_oauth_cache = getwd()) # Save any Oauth tokens to the current directory
+options(googleAuthR.scopes.selected = "https://www.googleapis.com/auth/analytics.readonly")
+library(googleAuthR)
+gar_auth_service(json_file = Sys.getenv("SERVICE_JSON"))
+gar_set_client(json = Sys.getenv("CLIENT_JSON"))
+library(googleAnalyticsR)
+#ga_auth(email=Sys.getenv("CLIENT_EMAIL"))
+library(stringr)
+library(VennDiagram)
+library(knitr)
+library(grid)
+
+colors_2 <- brewer.pal(n=2,name="Dark2")[1:2]
+theme_set(theme_minimal())
+
+view_id <- 105540599 # NTS
+client_id_index <- 2
+page_a <- "blog"
+page_b <- "portfolio"
+page_c <- "/"
+```
+
+# Introduction
+
+Segments are a fantastic way to organize the results of an analysis. There are, however, a few limitations of using segments in the standard (free) version of GA: 
+
+1) They cause reports to become sampled after 50,000 sessions
+2) Only 4 segments can be compared at one time
+3) Segments are saved under your Google account which make them hard to share
+4) When comparing segments, it's hard to tell how much they overlap
+
+All of these limitations can be resolved by bringing your Google Analytics data into R with the googleAnalyticsR library, but this post will focus on #4 above: Understanding segment overlap.
+
+# The Problem with Segment Overlap
+
+Segments are fairly straight forward to create in GA, but can trip users up in a number of ways. One common issue is when users fail to account for segment overlap. Why should you care whether your segments overlap? Because you'll want to interpret your segment metrics entirely different depending on the answer. Let me explain via a scenario I see fairly often.
+
+Sally is a marketing director in charge of a major pet retailer's website redesign. She worked with her branding agency to develop 3 different personas that they expect to find on their website: Cat Lovers, Dog Lovers, and Wholesale distributors. The UX of the website is designed to tailor to these personas and Sally is confronted with the question of how to report on website success. A natural decision is to frame the reporting KPIs around the personas developed earlier. She instructs her analytics team to create segments based on their personas.
+
+Here's where things start to break down. The analytics team is left to decide what behavior on the website indicates whether a user is one of those 3 personas. A very reasonable-seeming decision may be as follows:
+
+- Users who visit the /cats section are included in the 'Cat lovers' segment
+- Users who visit the /dogs section are included in the 'Dog lovers' segment
+- Users who log in and visit the 'bulk order' section are included in the 'Wholesalers' segment.
+
+A week after launch, the analytics team presents the following results:
+
+- Dog Lovers - 500 users, 14% conversion rate
+- Cat Lovers - 400 users, 15% conversion rate
+- Wholesalers - 200 users, 31% conversion rate
+
+Amazing! Sally loves these numbers. The only problem is that they're meaningless. What the analytics team failed to consider is that their suppliers always browse the /cats and /dogs sections before making their bulk orders. This means that those 500 Dog Lovers and 400 Cat Lovers are polluted with 200 Wholesalers. Think about how the 31% conversion rate of the wholesalers might artificially inflate the conversion rates of the Dog and Cat Lovers segments.
+
+The setup here is a bit contrived, but I've seen many flavors of it before. The original sin was attempting to convert UX personas into analytics segments. This encourages consumers of these reports to assume that the analytics segments are __mutually exclusive__ when they are not. Analytics segments can only highlight behavior, not who the person is. Honestly naming segments, such as "Visited /cats section", is often the best way to emphasize this reality.
+
+# What does this have to do with overlap?
+
+The problem above was that the report gave off the impression that segments were mutually exclusive when, in fact, they contained quite a bit of overlap. Without understanding the overlap, how can you interpret those numbers? Do we have 500+400+200=1100 users? Or do we have 200+(500-200)+(400-200)=700 users as would be the case if the 200 wholesalers were entirely represented in all segments. In a more extreme scenario, you may be looking at 3 segments which all report on the exact same set of users.
+
+As an example, how might you interpret those numbers above given each of these scenarios?
+
+## Scenario 1: Small, Even Overlap
+
+```{r message=FALSE,warning=FALSE,fig.width=5,echo=F}
+grid.newpage()
+grid.draw(draw.pairwise.venn(100,100,10,
+          category = c("Dog Lovers","Cat Lovers"),
+          
+             cat.fontfamily = "sans",
+             col = colors_2,
+             fill = colors_2,
+             cat.dist = c(-.1,-.1))
+)
+
+```
+
+## Scenario 2: Large, Even Overlap
+
+```{r warning=FALSE,message=FALSE,fig.width=5,echo=F}
+grid.newpage()
+grid.draw(draw.pairwise.venn(100,100,90,
+          category = c("Dog Lovers","Cat Lovers"),
+             cat.fontfamily = "sans",
+             col = colors_2,
+             fill = colors_2)
+)
+```
+
+## Scenario 3: Large, Uneven Overlap
+
+```{r warning=FALSE,message=FALSE,fig.width=5,echo=F}
+grid.newpage()
+grid.draw(draw.pairwise.venn(200,100,100,
+          category = c("Dog Lovers","Cat Lovers"),
+             cat.fontfamily = "sans",
+             col = colors_2,
+             fill = colors_2,
+             cat.dist = c(-.02,-.04))
+)
+```
+
+Scenario one is likely what the stakeholders at our pet company assumed would be the case - some slight overlap exists, but the metrics sufficiently indicate the behaviors of 'Dog' and 'Cat' lovers individually.
+
+However, scenario two might be the reality. Perhaps 90% of their users love to compare prices across cat/dog products and visit each section at least once. 
+
+Or perhaps scenario 3 is the reality. Maybe a coupon link has made the rounds, bringing users to start their journey under /dogs which left just the cat owners to move over to /cats. 
+
+Unfortunately, there's no way in standard GA to tell which scenario is actually occurring (though the new app+web version [includes this feature](https://support.google.com/analytics/answer/9328055?hl=en)). This is unfortunate, because each scenario would cause our stakeholders to interpret the segment metrics very differently.
+
+So let's move on to solving this issue in R.
+
+# Visualizing Segment Overlap
+
+I don't have access to a pet retailer's website, but I'm happy to share metrics from my own blog. In this scenario, I'll create 3 segments: 
+
+- Users who visit /blog
+- Users who visit /portfolio
+- Users who visit the home page, /
+
+Admittedly, these segments aren't very interesting, but they mirror a common method of building segments based on page visits that are not necessary mutually exclusive. With the googleAnalyticsR library, we can create these GA segments on the fly and pull down the appropriate data from GA. __Note__: For this to work, you'll need access to a user ID which could be their GA client ID. There's a great article [here](https://www.simoahava.com/gtm-tips/use-customtask-access-tracker-values-google-tag-manager/) on capturing client ID's in GA using custom dimensions.
+
+The code below shows how we can define our GA segments and pull the data. 
+
+```{r}
+# Use a function to generate our segments because each of the 3 segments are defined very similarly
+create_pagePath_segment <- function(pagePath, operator){
+  se_visited_page <- segment_element("pagePath", operator = operator, type = "DIMENSION", expression = pagePath)
+  sv_visited_page <- segment_vector_simple(list(list(se_visited_page)))
+  sd_visited_page <- segment_define(list(sv_visited_page))
+  
+  segment_ga4(paste0("Visited Page: ",pagePath), session_segment = sd_visited_page)
+}
+
+# Generate our 3 segments
+s_visited_page_a <- create_pagePath_segment(page_a,"REGEX")
+s_visited_page_b <- create_pagePath_segment(page_b,"REGEX")
+s_visited_page_c <- create_pagePath_segment(page_c,"EXACT")
+
+#Pull data from GA
+ga <- google_analytics(viewId=view_id, date_range = c(Sys.Date()-300,Sys.Date()-1),
+                       metrics = "sessions", dimensions = c(paste0("dimension",client_id_index)),
+                       max=-1, segments = list(s_visited_page_a,s_visited_page_b, s_visited_page_c))
+head(ga)
+```
+
+# Visualizing Segment Overlap
+
+Our next task is to visualize the overlap as a Venn diagram. We'll use the VennDiagram library in R to do so.
+
+```{r}
+# Define names of segments from the segment column
+segment_names <- unique(ga$segment)
+# Create a list of client IDs for each segment
+segments <- lapply(segment_names, function(x){ga %>% filter(segment == x) %>% select(dimension2) %>% pull()})
+colors <- brewer.pal(length(segment_names), "Dark2")
+
+# Generate Venn diagram
+diag <- venn.diagram(segments, 
+             category.names = segment_names,
+             width = 600,
+             height= 600,
+             resolution = 130,
+             imagetype="png" ,
+             filename = "ga_venn.png",
+             output=TRUE,
+             cat.fontfamily = "sans",
+             fontfamily = "sans",
+             cat.col = colors,
+             col = colors,
+             fill = colors,
+             cat.dist = c(.1,.1,.05),
+             margin = c(.15,.15,.15))
+
+# By default, the VennDiagram package outputs to disk, so weload the generated image here for display
+include_graphics("./ga_venn.png")
+
+```
+
+While the plot above doesn't scale the circles based on the size of the segment, it's easy to interpret the overlap between the segments. Here we can see that most users visit the homepage and that about ~10% of those users go on to visit the blog AND the portfolio section. 
+
+With that, I'll leave you with a happy accident in exploring the capabilities of the VennDiagram R library. Something you can look forward to if you start using this on your own data: a Venn diagram with 5 segments!
+
+```{r echo=F}
+diag <- venn.diagram(list(rep(1,1),rep(2,1),rep(3,1),rep(4,1),rep(5,1)), 
+                     category.names = c("A","B","C","D","E"),
+             width = 600,
+             height= 600,
+             resolution = 130,
+             imagetype="png" ,
+             filename = "5_segments.png",
+             output=TRUE,
+             cat.fontfamily = "sans",
+             fill = brewer.pal(5, "Dark2"),
+             fontfamily = "sans")
+# By default, the VennDiagram package outputs to disk, so weload the generated image here for display
+include_graphics("./5_segments.png")
+```
+
