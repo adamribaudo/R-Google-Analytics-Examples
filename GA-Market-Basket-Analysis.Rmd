@@ -1,0 +1,189 @@
+---
+title: "Market Basket Analysis using Google Analytics Data"
+output: 
+  html_document:
+    toc: yes
+    toc_float: yes
+    df_print: paged
+    number_sections: yes
+    theme: cosmo
+  html_notebook:
+    df_print: paged
+    number_sections: yes
+    theme: cosmo
+    toc: yes
+    toc_float: yes
+---
+
+```{r setup, warning=FALSE,message=FALSE,echo=FALSE}
+knitr::opts_chunk$set(
+  echo = T,
+  collapse = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  out.width = "70%",
+  fig.align = 'center',
+  fig.width = 7,
+  fig.asp = 0.618,  # 1 / phi
+  fig.show = "hold"
+)
+
+library(tidyverse)
+options(googleAuthR.scopes.selected = "https://www.googleapis.com/auth/analytics.readonly")
+library(googleAuthR)
+gar_auth_service(json_file = Sys.getenv("SERVICE_JSON"))
+library(googleAnalyticsR)
+gar_set_client(Sys.getenv("CLIENT_JSON"))
+library(gt)
+library(arules)
+library(arulesViz)
+library(data.table)
+library(RColorBrewer)
+library(ggthemes)
+library(scales)
+require(extrafont)
+
+palette <- brewer.pal(n=6,name="Pastel1")
+theme_set(theme_minimal())
+
+view_id <- Sys.getenv("VIEW_ID_NTS")
+date_range <- c("2019-05-23","2020-05-23")
+cd_session_id <- "dimension5"
+
+# Helper function to generate arules transactions from a dataframe
+get_transactions_from_df <- function(x){
+  x <- as.data.frame(x)
+  t <- as(split(x[,"items"],x[,"transactions"]), "transactions")
+  df_ids <- x %>% group_by(transactions) %>% summarise() 
+  transactionInfo(t) <- data.frame(transactionId = df_ids$transactions)
+  t
+}
+
+```
+
+# Introduction
+
+Ever since I learned about [Market Basket Analysis](https://en.wikipedia.org/wiki/Association_rule_learning), my head was spinning with ideas on how it could be applied to web data. To back up for a second, Market Basket Analysis (MBA), is a data mining technique that catalogs the strength in relationships between combinations of items placed together during a transaction. Applications often include: 
+
+- Recommending content in the form of "Users who view X and Y also view Z"
+- Offering promotions for combinations of items to increase revenue
+- Better understanding of user behavior and intent
+- Updating editorial decisions based on popular combinations of items
+
+The typical use case, and where the name is derived, is in the retail setting where marketers want to know what products are commonly associated with one another during checkout. The reason we need fancy algorithms for this type of analysis is due to the explosion of combinations to evaluate. As an example, if you wanted to look at the combinations of 2 or 3 items out of a set of 50 items, you would have 20,000 combinations to evaluate. That number expands immensely as you increase the number of unique items and increase the size of combinations.
+
+In the retail case, the "item" is a "product" and the "transaction" is "checkout". However, the algorithm underlying MBA doesn't care what you use as an "item" and "transaction". We can just as easily run an analysis that looks at web pages as "items" and browsing sessions as "transactions". Going further, if we have information related to webpage taxonomy and unique user IDs, we can abstract the analysis away from individual pages and look at taxonomy tags as "items" and users as "transactions". Hopefully that gives some flavor for how flexible this analysis can be.
+
+As a simple example, we'll run MBA on my own personal blog. Given my small number of pages and limited amount of traffic, this analysis won't do justice to the full power of MBA. Just be aware that this technique scales to thousands of items and tens of thousands of transactions without much effort.
+
+# Pull Data from Google Analytics
+
+I'm interested in understanding the combinations of pages that users visit during a session so that I might recommend new pages of interest during their journey. Perhaps I plan on asking my editorial team to manually attach these  recommendations in WordPress or perhaps I plan to feed this information into some sort of automated personalization engine. The first step is to pull down our "items" (webpages) and "transactions" (session IDs). We'll do this by calling the Google Analytics reporting API with the [googleAnalyticsR library](https://code.markedmondson.me/googleAnalyticsR/) and grabbing pages, landing pages, and session ids. 
+
+```{r echo=F,message=FALSE, warning=FALSE}
+
+ga_df <- google_analytics(viewId = view_id, date_range = date_range,
+                                     metrics = "pageviews",
+                                     dimensions = c("pagePath",cd_session_id, "landingPagePath"),
+                                     max = -1) %>% 
+                                      rename(session_id=dimension5) %>% select(-pageviews)
+```
+
+I've included the session 'landing page' and its purpose becomes clear once you think about how we plan to use our results. On its own, MBA doesn't provide any information about the sequence of items in a transaction, it simply indicates that "these items are associated". Given that we want to recommend a new page to a user __during__ their journey, we want to avoid recommending a page that is commonly associated with the __start__ of a journey. In other words, let's not recommend a landing page after they've landed!
+
+```{r echo=F,message=FALSE, warning=FALSE}
+
+ga_df_2 <- ga_df %>% 
+  # Remove query strings at the end of paths
+  mutate(pagePath = str_replace_all(pagePath, "\\?.*","")) %>% mutate(landingPagePath = str_replace_all(landingPagePath, "\\?.*","")) %>%
+  # prefix with 'ENTRANCE' if the page was a landing page
+  mutate(pagePath = if_else(pagePath == landingPagePath, paste0("ENTRANCE-",pagePath),pagePath)) %>% select(-landingPagePath) %>% 
+  group_by(session_id,pagePath) %>% 
+  summarise() %>% ungroup()
+```
+  
+To resolve this issue, we'll tag the starting pages with 'ENTRANCE-' at the beginning. In the example below you can see that we differentiate between someone landing on the 'differential scroll tracking' blog post by prepending 'ENTRANCE-'. We make no distinction regarding the ordering of the remaining pages.
+
+```{r echo=FALSE}
+ga_df_2 %>% filter(session_id == "1582641547248.274nwi3") %>% arrange(desc(pagePath)) %>% gt() %>% cols_label(session_id = "Session ID",pagePath = "Page Path")  %>% tab_style(style = cell_fill(color = palette[2]),locations = cells_body(rows=1))
+```
+
+Looking at the results below, we can see that most sessions contained only 1 pageview and that the number of pageviews taper off after that. It's good to get a general sense of the shape of the data before running MBA because it will influence the size of the combinations that we can reasonable expect. For example, it would be unreasonable to look for combinations of 9 different pages because only 1 session generated a combination of that length.
+  
+```{r echo=F}
+data.frame(table(ga_df_2 %>% count(session_id) %>% arrange(desc(n)) %>% select(n) %>% pull())) %>% rename(`Count of Pageviews` = Var1, Sessions = Freq) %>% gt()
+
+# Removing sessions with 1 pageview to make the results a bit easier to interpret. We're less interested in single-page-visits anyway.
+ga_df_3 <- ga_df_2 %>% inner_join(ga_df_2 %>% count(session_id) %>% filter(n > 1) %>% select(session_id))
+```
+
+# Running MBA
+
+To run our Market Basket Analysis, we'll use the arules package in R. Before we look at any results, it might be helpful to cover some terminology that often appears in MBA:
+
+- __Itemsets__ - these are combinations of items and are often associated with a count which demonstrates how frequent the combination appeared in the transaction history. You'll often see size-2 itemsets or size-3 itemsets, etc, indicating how many unique items appear in the itemset.
+- __Support__ - This is the percentage of transactions in which the itemsets (or association rules, covered next) appear
+- __Association Rules__ - These are presented in the format of "{Left Hand Side} => {Right Hand Side}" and indicate that transactions that contain itemsets on the LHS also include the item on the RHS. Note that the RHS only ever contains 1 item while the LHS can contain an itemset of any size.
+- __Confidence__ - This is a percentage indicating the strength of our association rule. It says "Out of the users who visited the items in the LHS, XX% visited the RHS". This is helpful, but can be misleading when items in the RHS are ubiquitous and relevant to nearly every combination of items.  To resolve this, we often look at both confidence and lift.
+- __Lift__ - This number indicates how much more likely we are to see the LHS and RHS together as opposed to apart in a transaction. A lift of 3 means we're 3x more likely to see these items together and a lift of .33 means we're 1/3 as likely. 
+
+With that, let's format our data for use with MBA and get started. The following table shows the top 4 itemsets discovered, sorted by support.
+
+```{r, echo=F}
+# Convert our GA data to MBA 'transactions' and 'items'
+transactions <- get_transactions_from_df(ga_df_3 %>% select(items = pagePath, transactions = session_id))
+# Generate frequent itemsets
+itemsets <- eclat(transactions, parameter = list(supp = .02, minlen = 2), control = list(verbose = F))
+itemsets_df <- data.frame(list(label = labels(itemsets), support = interestMeasure(itemsets, c("support"), transactions)))
+itemsets_df %>% arrange(desc(support)) %>% head(4) %>% gt() %>% fmt_percent(columns = "support") %>% cols_label(support = "Support",label = "Itemset")
+```
+
+Next, we run the Apriori algorithm to find association rules. Remember that we want to filter out any association rules where the 'entrance' page is on the RHS. This ensures that we never recommend an entrance page.
+
+```{r, echo=F}
+# Generate association rules
+rules <- apriori(transactions, parameter = list(supp = .02, confidence = .8, minlen=2), control = list(verbose = F))
+rules_df <- data.frame(list(label = labels(rules), 
+                            measure = interestMeasure(rules, c("support","count","confidence","lift"),transactions),
+                            lhs = labels(lhs(rules)),
+                            rhs = labels(rhs(rules))
+                            )
+                       ) %>% filter(!str_detect(rhs,"ENTRANCE")) %>% mutate(n = row_number())
+```
+
+
+The best way to present association rules is often in a scatter chart that allows us to look at support, confidence, and lift in one view. Below, you can see that 4 association rules were generated that have a minimum support of 2% and a minimum confidence of 80%.
+
+```{r, echo=F}
+ggplot(rules_df) + geom_point(aes(x=measure.support,y=measure.confidence, color = measure.lift)) + 
+  ggrepel::geom_label_repel(aes(x=measure.support,y=measure.confidence,label = n), point.padding = 1) +
+  #geom_text(aes(x=support, y=confidence, label = labels),alpha = .7,data=user_rules_labels,
+  xlim(c(0,.25)) + ylim(c(.6,1)) + 
+  labs(x="Support",y="Confidence",color="Lift") + scale_x_continuous(labels=scales::percent) + 
+  scale_y_continuous(labels=scales::percent)
+```
+
+```{r, echo=F}
+rules_df %>% select(n, `Association Rule` = label, Confidence = measure.confidence, Support = measure.support, Lift = measure.lift)  %>% gt(rowname_col = "n") %>% fmt_percent(columns = vars(Confidence,Support)) %>% fmt_number(columns = vars(Lift))
+```
+
+# Analysis of Results
+
+The scatter plot and table yield some interesting results. First, I should point out that finding an association rule with strong support, confidence, and lift is the holy grail, but exceedingly rare. Most commonly, you'll find items with high confidence and low support, or high support and low confidence. 
+
+Notice that many of the itemsets we discovered previously, such as "Blog" and "Entrance-/" didn't make the cut as association rules. This is because we're filtering to search for association rules with a minimum confidence of 80%. This is important to avoid the situation where we recommend content that is broadly popular, but not tailored to the user's unique viewing history.
+
+So what we can we determine from the graph and table above?
+
+- Rules #1 and #3 are nearly the mirrors of one another, remember that the 'entrance' version of each page is considered to be a unique page. What stands out is the high lift - these 2 pages are clearly connected to one another in a way that stands apart from their connection to other pages.
+- Rule #3 is interesting because of the high confidence and high support. This is often hard to find. When I review some of the analytics underlying these figures, I see that my blog is generating a lot of SEO traffic to the 'deploying auto track' page and that those users are going onto the 2nd page 92% of the time. If we look at the [page](https://www.noisetosignal.io/2016/02/deploying-autotrack-js-through-google-tag-manager/) in question, we can see that I have an "Update" callout. It looks like that callout is working very well!
+
+- Rule #2 is notable because it doesn't include an 'entrance' page. It's a nice, broadly applicable rule stating that users who visit my live streaming case study are 90% likely to visit, or to have visited, the blog landing page. 
+
+- Rule #4 is interesting given the 100% confidence (which I doubt you would ever see in a more realistic scenario). What this says is that if a user enters on the home page and __at some point__ visits my live streaming case study then __at some point__ they will (or will have already), with 100% certainty, visit the blog landing page. Notice that I have to emphasize the fact that this analysis gives no indication of the ordering of events. If we wanted to turn this rule into a content recommendation, we would likely want to check their browsing history first to avoid recommending a page they've already visited.
+
+# Closing Thoughts
+
+Hopefully the analysis above shows how MBA can help someone dig deeper into user behavior and start looking at metrics for patterns as opposed to metrics for individual pages/products. While I used individual pages as the "items" above, websites with thousands of pages may benefit from an analysis centered on content taxonomy such as "content types", "tags", or "topics". This makes the results much easier to interpret. One application of such an analysis may be feedback for the editorial team to focus on content that contains specific combinations of topics. Happy analyzing!
+
+
