@@ -8,4 +8,5 @@ This repository contains tutorials and code samples instructing analytics practi
 
 - Quantifying the impact of events on time series data using the CausalImpact library: [Tutorial](https://adamribaudo.github.io/R-Google-Analytics-Examples/Tutorial-Causal-Impact.nb.html) / [Code](Tutorial-Causal-Impact.Rmd)
 - Google Analytics audits via scripted R Markdown file: [Output](https://adamribaudo.github.io/R-Google-Analytics-Examples/GA-Audit-Tool.html) / [Code](GA-Audit-Tool.Rmd)
-- Recreating the Google Analytics explorer graph & table in R: [Output](https://adamribaudo.github.io/R-Google-Analytics-Examples/GA-explorer-in-R.nb.html) / [Code](GA-explorer-in-R.Rmd)
+- Recreating the Google Analytics explorer graph & table in R: [Output](https://adamribaudo.github.io/R-Google-Analytics-Examples/GA-explorer-in-R.nb.html) / [Code](https://adamribaudo.github.io/R-Google-Analytics-Examples/GA-explorer-in-R.Rmd)
+- Exploring GA segment overlap with Venn diagrams: [Output](https://adamribaudo.github.io/R-Google-Analytics-Examples/GA-segment-overlap.html) / [Code](GA-segment-overlap.Rmd)

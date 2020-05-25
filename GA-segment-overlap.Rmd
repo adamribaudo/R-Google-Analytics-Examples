@@ -83,7 +83,7 @@ A week after launch, the analytics team presents the following results:
 - Cat Lovers - 400 users, 15% conversion rate
 - Wholesalers - 200 users, 31% conversion rate
 
-Amazing! Sally loves these numbers. The only problem is that they're meaningless. What the analytics team failed to consider is that their suppliers always browse the /cats and /dogs sections before making their bulk orders. This means that those 500 Dog Lovers and 400 Cat Lovers are polluted with 200 Wholesalers. Think about how the 31% conversion rate of the wholesalers might artificially inflate the conversion rates of the Dog and Cat Lovers segments.
+Amazing! Sally loves these numbers. The only problem is that they're meaningless. What the analytics team failed to consider is that their wholesalers always browse the /cats and /dogs sections before making their bulk orders. This means that those 500 Dog Lovers and 400 Cat Lovers are polluted with 200 Wholesalers. Think about how the 31% conversion rate of the wholesalers might artificially inflate the conversion rates of the Dog and Cat Lovers segments.
 
 The setup here is a bit contrived, but I've seen many flavors of it before. The original sin was attempting to convert UX personas into analytics segments. This encourages consumers of these reports to assume that the analytics segments are __mutually exclusive__ when they are not. Analytics segments can only highlight behavior, not who the person is. Honestly naming segments, such as "Visited /cats section", is often the best way to emphasize this reality.
 
