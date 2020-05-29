@@ -1,8 +1,14 @@
 # R and Google Analytics Use Cases
 
-## Overview
+## Introduction
 
-This repository contains tutorials and code samples instructing analytics practioners on methods of enhancing their Google Analytics analysis through the use of R.
+Your web analytics data is trapped! Google Analytics provides you with a handful of built-in reports and features, but your data has so much more potential. Fortunately, the data-oriented programming language R, can easily connect to Google Analytics and produce results that go far beyond the features in GA (or even Data Studio). With R you can:
+
+- Create high-quality charts & graphs not accessible in the Google Analytics interface
+- Run statistical tests to compare tests or segments
+- Join your web data with other data sources (CRM, offline sales, server-side data, etc)  
+- Run machine learning algorithms such as forecasting, clustering, and market basket analysis
+- Work with unsampled data
 
 ## Examples
 
