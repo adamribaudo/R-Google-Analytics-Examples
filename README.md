@@ -25,3 +25,4 @@ Your web analytics data is trapped! Google Analytics provides you with a handful
 - Offline A/B testing
 - Working with unsampled data
 - Collaborate on version-controlled R scripts + R Studio Pro
+- User journey maps using igraph
