@@ -16,7 +16,6 @@ Your web analytics data is trapped! Google Analytics provides you with a handful
 
 ## TODO
 
-- Demonstration of visualizations available in R that wouldn't be possible otherwise
 - Slide output to automate monthly reporting
 - Google Cloud Runner demonstration to automate processing
 - Basic statistical tests
@@ -25,5 +24,4 @@ Your web analytics data is trapped! Google Analytics provides you with a handful
 - Anomaly detection
 - Offline A/B testing
 - Working with unsampled data
-- Collaborate on version-controlled R scripts + R Studio Pro
-- User journey maps using igraph
+- Working with GA in R Studio Cloud
