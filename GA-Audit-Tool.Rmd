@@ -1,15 +1,20 @@
 ---
 title: "GA Audit Tool"
 output:
-  html_document:
-    df_print: paged
-    toc: yes
   html_notebook:
     df_print: paged
     number_sections: yes
     theme: cosmo
     toc: yes
-    toc_float: yes
+    toc_float:
+      collapsed: false
+  html_document:
+    toc: yes
+    toc_float:
+      collapsed: false
+    df_print: paged
+    number_sections: yes
+    theme: cosmo
 ---
 
 <style>
@@ -30,29 +35,32 @@ knitr::opts_chunk$set(
 )
 library(assertthat)
 library(tidyverse)
+library(rvest)
+library(lubridate)
+library(stringr)
 library(rmarkdown)
-options(gargle_oauth_cache = getwd()) # Save any Oauth tokens to the current directory
+library(dygraphs)
+library(xts)
+
+# Stored by default in C:/Users/{{user}}}/.R/gargle/gargle-oauth
+options(
+  gargle_oauth_cache = "/config",
+  googleAuthR.scopes.selected = "https://www.googleapis.com/auth/analytics.readonly" # Readonly scope is required for certain management API calls. See https://developers.google.com/analytics/devguides/config/mgmt/v3/authorization#OAuth2Authorizing
+)
 library(googleAuthR)
 
 # Service Account Credentials
-# Readonly scope is required for certain management API calls. See https://developers.google.com/analytics/devguides/config/mgmt/v3/authorization#OAuth2Authorizing
-options(googleAuthR.scopes.selected = "https://www.googleapis.com/auth/analytics.readonly")
-gar_auth_service(json_file=Sys.getenv("SERVICE_JSON"))
+# gar_auth_service(json_file=Sys.getenv("SERVICE_JSON"))
 
+library(googleAnalyticsR)
 # Alternatively, an OAuth client and email can be provided
 gar_set_client(json = Sys.getenv("CLIENT_JSON"))
-library(googleAnalyticsR)
-#ga_auth(email=Sys.getenv("CLIENT_EMAIL"))
-#gar_auth()
-library(lubridate)
-library(stringr)
-library(gt)
+ga_auth(email=Sys.getenv("CLIENT_EMAIL"))
 
-theme_set(theme_minimal())
-
+theme_set(theme_minimal() + theme(text=element_text(size=16)))
 # Select an account ID and view ID to begin
-account_id <- 62965925 # NtS GA Account
-view_id <- 105540599 # NtS Main view
+account_id <- Sys.getenv("ACCOUNT_ID") 
+view_id <- Sys.getenv("VIEW_ID") 
 ```
 
 ```{r property and view data, message=FALSE, warning=FALSE}
@@ -70,8 +78,10 @@ property_id <- (views_df %>% filter(id == view_id))$webPropertyId
 custom_dimensions_df <-  ga_custom_vars_list(accountId = account_id, webPropertyId = property_id)
 goals_df <- ga_goal_list(webPropertyId = property_id, profileId = view_id, accountId=account_id)
 
-view_filters_df <- ga_filter_view_list(webPropertyId = property_id, viewId = view_id,accountId = account_id) %>% select(filterRef.id, profileRef.id, profileRef.name, rank) %>% left_join(ga_filter_list(account_id), by=c("filterRef.id" = "id"))
-
+view_filters_df <- ga_filter_view_list(webPropertyId = property_id, viewId = view_id,accountId = account_id)
+if(nrow(view_filters_df) > 0){
+  view_filters_df <- view_filters_df %>% select(filterRef.id, profileRef.id, profileRef.name, rank) %>% left_join(ga_filter_list(account_id), by=c("filterRef.id" = "id"))
+}
 
 ```
 
@@ -86,8 +96,6 @@ property_df %>% arrange(desc(updated)) %>% select(Property=name, URL=websiteUrl,
 ```
 
 ## Views
-
-
 
 ```{r}
 property_with_most_views <- views_df %>% group_by(`name.y`) %>% tally() %>% arrange(desc(n)) %>% ungroup() %>% filter(row_number() == 1)
@@ -104,8 +112,7 @@ TODO - only need to show this if there is more than 1 property
 The property with the most views is __`r property_with_most_views$name.y`__ with `r property_with_most_views$n` views. The number of views per property is below.
 
 ```{r fig.height = 4}
-ggplot(property_with_views_views <- views_df %>% group_by(webPropertyId, name.y) %>% tally()) + 
-  geom_col(aes(y=n,x=reorder(paste(webPropertyId, name.y, sep=" : "),(n)))) + coord_flip() + ylab("Number of Views") + xlab("Property ID")
+views_df %>% group_by(webPropertyId, name.y) %>% tally() %>% select(`Property ID`=webPropertyId,Name=name.y,`View Count`=n) %>% arrange(desc(`View Count`))
 ```
 
 # Configuration
@@ -129,7 +136,10 @@ The view, __`r view_name`__, has no associated custom dimensions
 Property __`r property_name`__ has `r nrow(custom_dimensions_df)` custom dimensions shown below:
 
 ```{r}
-custom_dimensions_df %>% select(ID = index, Name = name, Scope = scope, `Is Active?`=active)
+if(!no_custom_dimensions)
+{
+  custom_dimensions_df %>% select(ID = index, Name = name, Scope = scope, `Is Active?`=active)
+}
 ```
 
 
@@ -148,7 +158,7 @@ if(!no_goals)
 }
 ```
 
-## Goals {.tabset .tabset-fade .tabset-pills `r if_else(no_goals,".hide","")`}
+## Goals {.tabset .tabset-fade .tabset-pills}
 
 ### All Goals (`r nrow(goals_df)`)
 
@@ -161,7 +171,7 @@ if(!no_goals)
 }
 ```
 
-### Destination Goals (`r nrow(goals_df %>% filter(type == "URL_DESTINATION"))`)
+### Destination Goals (`r if(nrow(goals_df) != 0){nrow(goals_df %>% filter(type == "URL_DESTINATION"))}else{ integer(1)}`)
 
 ```{r}
 if(!no_goals && !no_destination_goals)
@@ -170,7 +180,7 @@ if(!no_goals && !no_destination_goals)
 }
 ```
 
-### Event Goals (`r nrow(goals_df %>% filter(type == "EVENT"))`)
+### Event Goals (`r if(nrow(goals_df) != 0){nrow(goals_df %>% filter(type == "EVENT"))}else{integer(1)}`)
 
 ```{r}
 if(!no_goals && !no_event_goals)
@@ -183,10 +193,14 @@ if(!no_goals && !no_event_goals)
 ```{r}
 # Check to see if there are any goals and change display of markdown accordingly
 no_filters <- nrow(view_filters_df) == 0
-no_include_exclude_filters <- nrow(view_filters_df %>% filter(type == "INCLUDE" | type == "EXCLUDE")) == 0
+no_include_exclude_filters <- T
+if(!no_filters)
+{
+  no_include_exclude_filters <- nrow(view_filters_df %>% filter(type == "INCLUDE" | type == "EXCLUDE")) == 0
+}
 ```
 
-## Filters {.tabset .tabset-fade .tabset-pills `r if_else(no_filters,".hide","")`}
+## Filters {.tabset .tabset-fade .tabset-pills}
 
 ### All Filters (`r nrow(view_filters_df)`)
 
@@ -199,7 +213,7 @@ if(!no_filters)
 }
 ```
 
-### Include Filters (`r nrow(view_filters_df %>% filter(type == "INCLUDE"))`)
+### Include Filters (`r if(!no_filters){nrow(view_filters_df %>% filter(type == "INCLUDE"))}else{integer(1)}`)
 
 Include/Exclude filters are called out below along with their criteria.
 
@@ -210,7 +224,7 @@ if(!no_filters && nrow(view_filters_df %>% filter(type == "INCLUDE")) > 0)
 }
 ```
 
-### Exclude Filters (`r nrow(view_filters_df %>% filter(type == "EXCLUDE"))`)
+### Exclude Filters (`r if(!no_filters){nrow(view_filters_df %>% filter(type == "EXCLUDE"))}else{integer(1)}`)
 
 Include/Exclude filters are called out below along with their criteria.
 
@@ -224,7 +238,7 @@ if(!no_filters && nrow(view_filters_df %>% filter(type == "EXCLUDE")) > 0)
 
 # Data Integrity 
 
-## Goal Measurement {.tabset .tabset-fade .tabset-pills `r if_else(no_goals,".hide","")`}
+## Goal Measurement {.tabset .tabset-fade .tabset-pills}
 
 ```{r message=FALSE,warning=FALSE}
 if(!no_goals)
@@ -237,7 +251,7 @@ if(!no_goals)
   date_range_30 <- c(Sys.Date() - 31,Sys.Date() - 1)
   date_range_90 <- c(Sys.Date() - 91,Sys.Date() - 1)
   
-  
+   
   get_goal_data <- function(date_range){
     google_analytics(viewId = view_id, date_range = date_range, metrics = ga_goal_metric_names, dimensions = c("channelGrouping")) %>% select(-channelGrouping) %>% pivot_longer(cols=everything(),names_to="Goal",values_to = "Completions") %>% group_by(Goal) %>% summarise(Completions = sum(Completions)) %>% left_join(goal_lookup,by=c("Goal"="Metric_Name")) %>% select(Goal = Goal.y,Completions)
   }
@@ -249,7 +263,7 @@ if(!no_goals)
 ```
 
 
-### Past 7 Days
+### Past 7 Days { `r if_else(no_goals,".hide","")`}
 
 ```{r}
 if(!no_goals)
@@ -260,7 +274,7 @@ if(!no_goals)
 
 
 
-### Past 30 Days
+### Past 30 Days { `r if_else(no_goals,".hide","")`}
 
 ```{r}
 if(!no_goals)
@@ -268,7 +282,7 @@ if(!no_goals)
   ga_goal_data_30
 }
 ```
-### Past 90 Days
+### Past 90 Days {  `r if_else(no_goals,".hide","")`}
 
 ```{r}
 if(!no_goals)
@@ -277,7 +291,7 @@ if(!no_goals)
 }
 ```
 
-## Hostname Review
+## Hostnames
 
 ```{r message=FALSE,warning=FALSE}
 ga_hostnames <- google_analytics(viewId = view_id, date_range = c(Sys.Date()-31,Sys.Date()-1),metrics = "sessions",dimensions = c("hostname"),max=-1)
@@ -322,20 +336,59 @@ ga_events %>% select(`Event Action` = eventAction, Total = totalEvents) %>% grou
 ga_events %>% select(`Event Label` = eventLabel, Total = totalEvents) %>% group_by(`Event Label`) %>% summarise(Total = sum(Total)) %>% arrange(desc(Total))
 ```
 
+## Source / Medium / Campaign {.tabset .tabset-fade .tabset-pills}
+
+### Sources
+
+```{r}
+ga_sources <- google_analytics(viewId=view_id,date_range=c(Sys.Date()-31,Sys.Date()-1),metrics="sessions",dimensions = c("source")) %>% arrange(desc(sessions))
+ga_sources
+```
+
+### Mediums
+
+```{r}
+ga_mediums <- google_analytics(viewId=view_id,date_range=c(Sys.Date()-31,Sys.Date()-1),metrics="sessions",dimensions = c("medium")) %>% arrange(desc(sessions))
+ga_mediums
+```
+
+### Campaigns
+
+```{r}
+ga_campaigns <- google_analytics(viewId=view_id,date_range=c(Sys.Date()-31,Sys.Date()-1),metrics="sessions",dimensions = c("campaign")) %>% arrange(desc(sessions))
+ga_campaigns
+```
+
 # Trends
 
 ## All Traffic
 
-```{r message=FALSE,warning=FALSE,fig.width=10,fig.height=5}
+```{r fig.width = 8, fig.asp = .3}
 ga_all_traffic_current <- google_analytics(viewId=view_id,date_range=c(Sys.Date()-31,Sys.Date()-1),metrics="sessions",dimensions = c("date")) %>% rename(`Sessions - Last 30 Days`=sessions) %>% mutate(row = row_number())
 ga_all_traffic_mom <- google_analytics(viewId=view_id,date_range=c(Sys.Date()-62,Sys.Date()-32),metrics="sessions",dimensions = c("date")) %>% rename(`Sessions - Previous Period`=sessions) %>% mutate(row = row_number())
 ga_all_traffic_yoy <- google_analytics(viewId=view_id,date_range=c(Sys.Date()-365-30,Sys.Date()-365-1),metrics="sessions",dimensions = c("date")) %>% rename(`Sessions - Previous Year`=sessions) %>% mutate(row = row_number())
-
 ga_all_traffic <- ga_all_traffic_current %>% left_join(ga_all_traffic_mom %>% select(-date)) %>% left_join(ga_all_traffic_yoy %>% select(-date)) %>% select(-row) %>% pivot_longer(cols=-date,names_to = "Period",values_to="Sessions")
 
-ggplot(ga_all_traffic) + geom_line(aes(x=date,y=Sessions,color=Period)) + xlab("Date") + labs(title="Sessions from All Sources")
 
+ga_all_traffic_wide <- ga_all_traffic %>% pivot_wider(id_cols = c(date), names_from = Period, values_from = Sessions)
+
+ga_sessions_last_30_xts <- xts(ga_all_traffic_wide %>% select(2), order.by = ga_all_traffic_wide$date)
+ga_sessions_prev_period_xts <- xts(ga_all_traffic_wide %>% select(3), order.by = ga_all_traffic_wide$date)
+ga_sessions_prev_year_xts <- xts(ga_all_traffic_wide %>% select(4), order.by = ga_all_traffic_wide$date)
+
+ga_sessions_xts <- cbind(ga_sessions_last_30_xts,ga_sessions_prev_period_xts,ga_sessions_prev_year_xts)
+
+dygraph(ga_sessions_xts) %>% 
+  dyRangeSelector() %>% # Optionally, we can include an interactive date range selector
+  dyOptions(fillGraph = TRUE, fillAlpha = 0.15, gridLineColor = "#DDDDDD", axisLabelFontSize = 10) %>%
+  dySeries("Sessions...Last.30.Days", label = "Sessions",  drawPoints = T, pointSize = 2, strokeWidth=2) %>%
+  dySeries("Sessions...Previous.Period", label = "Previous Period",  drawPoints = T, pointSize = 2, strokeWidth=2) %>%
+  dySeries("Sessions...Previous.Year", label = "Previous Year",  drawPoints = T, pointSize = 2, strokeWidth=2) %>%
+  dyAxis(name = "y", axisLineColor = "white", label = "Sessions") %>%
+  dyAxis(name = "x", drawGrid = F)  %>%
+  dyLegend(show = "always", hideOnMouseOut =F, width = 600)
 ```
+
 
 
 ## Landing Pages
@@ -354,7 +407,7 @@ ga_landing_pages
 ```{r message=FALSE,warning=FALSE}
 filter_clause <- filter_clause_ga4(list(dim_filter(dimension = "channelGrouping", operator = "EXACT", expressions = "Referral")))
 
-ga_referrers <- google_analytics(viewId=view_id, date_range=c(Sys.Date()-31,Sys.Date()-1),metrics=c("sessions","bounceRate","avgSessionDuration"), dimensions=c("sourceMedium"),dim_filters = filter_clause,max=100) 
+ga_referrers <- google_analytics(viewId=view_id, date_range=c(Sys.Date()-31,Sys.Date()-1),metrics=c("sessions","bounceRate","avgSessionDuration"), dimensions=c("sourceMedium"),dim_filters = filter_clause,max=100)  %>% rename(`source / medium` = sourceMedium)
 
 if(!is.null(ga_referrers))
 {
@@ -362,9 +415,45 @@ if(!is.null(ga_referrers))
 }
 ```
 
+# Common Issues
+
+## Hard-Coded Analytics Scripts
+
+Looking for hard-coded analytics scripts in the HTML of the website pages associated with each property.
+
+```{r message=FALSE}
+lapply(property_df$websiteUrl,function(x){
+  read_html(x) %>% html_nodes("script") %>% xml2::xml_find_all(".//text()") %>% as.character() %>% enframe() %>% mutate(websiteUrl = x) %>% mutate(`gtm.js`=str_detect(value, "gtm.js")) %>% mutate(`analytics.js`=str_detect(value, "/analytics.js")) %>% mutate(`gtag.js`=str_detect(value, "gtag.js"))
+}) %>% bind_rows() %>% 
+  group_by(websiteUrl) %>% summarise(`gtm.js`=any(`gtm.js`),`analytics.js`=any(`analytics.js`),`gtag.js`=any(`gtag.js`)) %>% left_join(property_df %>% select(websiteUrl,id)) %>% select(`Property ID`=id, URL=websiteUrl,`gtm.js`,`analytics.js`,`gtag.js`)
+```
+
+## Email Address in Page Paths
+
+```{r message=FALSE}
+
+pii_clause <- filter_clause_ga4(list(dim_filter(dimension = "pagePath", operator = "REGEXP", expressions = "\\?.+email=")))
+ga <- google_analytics(viewId=view_id, date_range=c(Sys.Date()-91,Sys.Date()-1),metrics=c("pageViews"), dimensions=c("pagePath"),dim_filters = pii_clause,max=-1)
+if(is.null(ga))ga <- data.frame()
+
+```
+Found `r nrow(ga)` page paths with 'email' in the query string in the last 90 days.
+
+```{r}
+if(nrow(ga) > 0)
+{
+  ga %>% select(pagePath)
+}
+```
+
+
 # TODO List
 
 - Campaign Trends
-- Check for path format (full path including host name or not)
 - Anomalies - Gaps in data, start/end date of data collection
-- Campaign Tracking - Source/mediums ? What else?
+- How to handle key pages or flows to track, like login?
+- How to handle form completion?
+- E-commerce considerations
+- COMMON ISSUES section: self-referrals, 0% bounce rate, PII in URLs. GTM instaleld in correct place
+- GTM Installation and container ID
+- View Settings - exclude bots

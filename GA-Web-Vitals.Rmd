@@ -19,29 +19,24 @@ knitr::opts_chunk$set(
   fig.asp = 0.618,  # 1 / phi
   fig.show = "hold"
 )
-suppressWarnings(suppressMessages(library(assertthat)))
-suppressWarnings(suppressMessages(library(tidyverse)))
-suppressWarnings(suppressMessages(library(lubridate)))
-suppressWarnings(suppressMessages(library(googleAuthR)))
-suppressWarnings(suppressMessages(library(showtext)))
-# This only needs to run once
-#font_add_google("Roboto", "roboto")
+library(tidyverse)
+library(googleAuthR)
+library(showtext)
+library(stringr)
+# This only needs to run once per session
+font_add_google("Roboto", "roboto")
 showtext_auto()
 library(rmarkdown)
-options(gargle_oauth_cache = getwd()) # Save any Oauth tokens to the current directory
-
-library(gt)
-
+options(
+  gargle_oauth_cache = "/config",
+  googleAuthR.scopes.selected = "https://www.googleapis.com/auth/analytics.readonly"
+)
 # Service Account Credentials
-options(googleAuthR.scopes.selected = "https://www.googleapis.com/auth/analytics.readonly")
-gar_auth_service(json_file=Sys.getenv("SERVICE_JSON"))
+#gar_auth_service(json_file=Sys.getenv("SERVICE_JSON_NTS"))
+gar_set_client(json = Sys.getenv("CLIENT_JSON_NTS_NO_ORG"))
+gar_auth(email=Sys.getenv("CLIENT_EMAIL_NTS"))
+library(googleAnalyticsR)
 
-# Use sink to suppress output of project ID
-sink(gar_set_client(json = Sys.getenv("CLIENT_JSON")))
-suppressWarnings(suppressMessages(library(googleAnalyticsR)))
-
-
-library(stringr)
 theme_set(theme_minimal())
 
 # Select an account ID and view ID to begin
@@ -54,12 +49,16 @@ view_id <- 105540599 # NtS Main view
 # Filter to retrieve only web vital events
 vitals_filter <- filter_clause_ga4(list(dim_filter(dimension = "eventCategory",operator = "EXACT", expressions = "Web Vital Reporting")))
 
-# Retrieve metric data from GA events
-ga <- google_analytics(viewId = view_id, date_range = c("2020-06-01","2020-06-05"),
+# Retrieve vital metric data from GA events
+ga <- google_analytics(viewId = view_id, 
+                       date_range = c(Sys.Date()-30,Sys.Date()),
                        metrics = c("eventValue"),
+                       max = -1,
                        dimensions = c("eventAction","eventLabel","deviceCategory"),
                        dim_filters = vitals_filter) %>% mutate(eventValue = eventValue / 1000.0) %>%
-  mutate(deviceCategory = forcats::fct_recode(deviceCategory,Desktop="desktop",Mobile="mobile")) %>% rename(Metric=eventAction)
+  mutate(deviceCategory = forcats::fct_recode(deviceCategory,Desktop="desktop",Mobile="mobile")) %>% rename(Metric=eventAction) %>%
+  # Dropping tablet to simplify reporting
+  filter(deviceCategory != "tablet")
 
 
 # Calculate percentiles for each metric and device type
@@ -78,7 +77,12 @@ ggplot(ga) + geom_histogram(aes(x=eventValue),bins=20) +
   scale_fill_manual(name = "Experience", values = c("Good" = "#59A14F","Needs Improvement"="#F28E2B","Poor"="#E15759")) +
   geom_vline(aes(xintercept=eventValue,color="75th Percentile"),linetype=3,size=1,data=percentiles) +
   scale_color_manual(name = "", values = c(`75th Percentile` = "black")) +
-  theme(legend.position="right") +  theme(text=element_text(size=12,  family="roboto")) +
+  theme(legend.position="right",
+        text=element_text(size=12,  family="roboto"),
+        axis.title.y = element_text(margin = margin(r = 10,unit = "pt")),
+        axis.title.x = element_text(margin = margin(t = 10,unit = "pt")),
+        plot.margin = margin(.5, 1.5,.5,.5,unit = "cm")
+        ) + 
   scale_x_continuous(labels=scales::number_format(accuracy = .01)) + 
   labs(title="Core Web Vitals",x="Value",y="Count")
 
