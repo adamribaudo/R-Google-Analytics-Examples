@@ -17,3 +17,4 @@ Your web analytics data is trapped! Google Analytics provides you with a handful
 - Recreating the Google Analytics explorer graph & table in R: [Output](https://adamribaudo.github.io/R-Google-Analytics-Examples/GA-explorer-in-R.nb.html) / [Code](https://adamribaudo.github.io/R-Google-Analytics-Examples/GA-explorer-in-R.Rmd)
 - Exploring GA segment overlap with Venn diagrams: [Output](https://adamribaudo.github.io/R-Google-Analytics-Examples/GA-segment-overlap.html) / [Code](GA-segment-overlap.Rmd)
 - Running Market Basket Analysis with GA data: [Blog Post](https://adamribaudo.github.io/R-Google-Analytics-Examples/GA-Market-Basket-Analysis.html) / [Code](GA-Market-Basket-Analysis.Rmd)
+- Revese Path Analysis: [Demo](https://reversepath-atcv7qt3fq-ue.a.run.app/) / [Code](GA-Reverse-Path-Shiny.R)
